@@ -1,9 +1,7 @@
-import { ThemedText } from "@/components/themed-text";
-import { ThemedView } from "@/components/themed-view";
-import { WebBadge } from "@/components/web-badge";
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
-import { Platform, StyleSheet } from "react-native";
+import { StyleSheet, Text } from "react-native";
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { ThemedView } from "../../../components/themed-view";
+import { BottomTabInset, MaxContentWidth, Spacing } from '../../../constants/theme';
 
 import * as React from 'react';
 import { TextInput } from 'react-native-paper';
@@ -18,18 +16,17 @@ export default function LoginScreen() {
 
         <ThemedView type="backgroundElement" style={styles.stepContainer}>
 
-               <ThemedText type="code" style={styles.code}>
+               <Text style={styles.code}>
           Email
-        </ThemedText>
+        </Text>
            <TextInput
       label="Email"
       value={text}
       onChangeText={text => setText(text)}
     />
-         
+
         </ThemedView>
 
-        {Platform.OS === 'web' && <WebBadge />}
       </SafeAreaView>
     </ThemedView>
   );
