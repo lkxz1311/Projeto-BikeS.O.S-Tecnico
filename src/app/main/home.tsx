@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { ScrollView, StyleSheet, TouchableOpacity, View, Alert } from "react-native";
+import { ScrollView, StyleSheet, TouchableOpacity, View, Alert, Switch } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Avatar, Card, Chip, Divider, IconButton, Text, ActivityIndicator } from "react-native-paper";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
@@ -27,6 +27,7 @@ export default function Home() {
   const [historico, setHistorico] = useState<Pedido[]>([]);
   const [loading, setLoading] = useState(true);
   const [nomeTecnico, setNomeTecnico] = useState("");
+  const [online, setOnline] = useState(true);
   const [verTodosPedidos, setVerTodosPedidos] = useState(false);
   const [verTodosHistorico, setVerTodosHistorico] = useState(false);
 
@@ -47,15 +48,16 @@ export default function Home() {
 
       const resDisponiveis = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/pedidos/disponiveis`);
       const disponiveis = await resDisponiveis.json();
-      setPedidosDisponiveis(disponiveis);
+      setPedidosDisponiveis(Array.isArray(disponiveis) ? disponiveis : []);
 
       const resAndamento = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/pedidos/emandamento`);
       const andamento = await resAndamento.json();
-      setPedidosEmAndamento(andamento);
+      setPedidosEmAndamento(Array.isArray(andamento) ? andamento : []);
 
-      const resHistorico = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/pedidos/disponiveis`);
-      const todos = await resHistorico.json();
-      setHistorico(todos.filter((p: Pedido) => ["Finalizado", "Rejeitado"].includes(p.status)));
+      // Busca histórico — pedidos finalizados ou rejeitados
+      const resHistorico = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/pedidos/historico`);
+      const hist = await resHistorico.json();
+      setHistorico(Array.isArray(hist) ? hist : []);
 
     } catch (error) {
       console.log("Erro ao carregar dados:", error);
@@ -85,6 +87,12 @@ export default function Home() {
     return new Date(data).toLocaleDateString("pt-BR");
   }
 
+  function labelTipo(tipo: string) {
+    if (tipo === "sos") return "SOS";
+    if (tipo === "agendado") return "Agendado";
+    return "Normal";
+  }
+
   function corChip(tipo: string) {
     if (tipo === "sos") return styles.chipSOS;
     if (tipo === "agendado") return styles.chipAgendado;
@@ -107,7 +115,24 @@ export default function Home() {
               <Text style={styles.subtitulo}>{nomeTecnico}</Text>
             </View>
           </View>
-          <IconButton icon="bell-outline" iconColor="#2E7D32" size={24} />
+          <View style={styles.headerDireita}>
+            <Text style={[styles.statusTexto, { color: online ? "#2E7D32" : "#9E9E9E" }]}>
+              {online ? "Online" : "Offline"}
+            </Text>
+            <Switch
+              value={online}
+              onValueChange={(val) => {
+                setOnline(val);
+                Alert.alert(
+                  val ? "Você está Online" : "Você está Offline",
+                  val ? "Agora você pode receber pedidos." : "Você não receberá novos pedidos."
+                );
+              }}
+              trackColor={{ false: "#D1D5DB", true: "#A5D6A7" }}
+              thumbColor={online ? "#2E7D32" : "#9E9E9E"}
+            />
+            <IconButton icon="bell-outline" iconColor="#2E7D32" size={24} />
+          </View>
         </View>
 
         {/* RESUMO */}
@@ -157,6 +182,14 @@ export default function Home() {
 
         {loading ? (
           <ActivityIndicator color="#2E7D32" style={{ marginTop: 20 }} />
+        ) : !online ? (
+          <Card style={styles.cardVazio}>
+            <Card.Content style={styles.cardVazioContent}>
+              <MaterialCommunityIcons name="wifi-off" size={40} color="#9E9E9E" />
+              <Text style={styles.cardVazioTexto}>Você está offline</Text>
+              <Text style={styles.cardVazioSubtexto}>Ative o status online para receber pedidos</Text>
+            </Card.Content>
+          </Card>
         ) : pedidosDisponiveis.length === 0 ? (
           <Card style={styles.cardVazio}>
             <Card.Content style={styles.cardVazioContent}>
@@ -166,15 +199,15 @@ export default function Home() {
           </Card>
         ) : (
           pedidosVisiveis.map((pedido) => (
-            <Card key={pedido.id} style={styles.cardPedido}>
+            <Card key={pedido.id} style={[styles.cardPedido, pedido.tipo === "sos" && styles.cardSOS]}>
               <Card.Content>
                 <View style={styles.topoPedido}>
                   <View style={styles.codigoBox}>
                     <MaterialCommunityIcons name="clipboard-text-outline" size={20} color="#2E7D32" />
                     <Text style={styles.codigo}>#{pedido.codigo}</Text>
                   </View>
-                  <Chip style={corChip(pedido.tipo)} textStyle={styles.chipTexto}>
-                    {pedido.tipo === "sos" ? "SOS" : pedido.tipo === "agendado" ? "Agendado" : "Normal"}
+                  <Chip style={corChip(pedido.tipo)} textStyle={[styles.chipTexto, pedido.tipo === "sos" && styles.chipSOSTexto]}>
+                    {labelTipo(pedido.tipo)}
                   </Chip>
                 </View>
 
@@ -258,6 +291,8 @@ const styles = StyleSheet.create({
   content: { padding: 16, paddingBottom: 30 },
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 18 },
   headerEsquerda: { flexDirection: "row", alignItems: "center" },
+  headerDireita: { flexDirection: "row", alignItems: "center", gap: 4 },
+  statusTexto: { fontSize: 13, fontWeight: "bold" },
   avatar: { backgroundColor: "#2E7D32", marginRight: 12 },
   titulo: { fontSize: 22, fontWeight: "bold", color: "#1E2A38" },
   subtitulo: { color: "#5F6B7A", marginTop: 2 },
@@ -274,7 +309,9 @@ const styles = StyleSheet.create({
   cardVazio: { backgroundColor: "#FFFFFF", borderRadius: 18, marginBottom: 12 },
   cardVazioContent: { alignItems: "center", paddingVertical: 20 },
   cardVazioTexto: { color: "#9E9E9E", marginTop: 8, fontSize: 15 },
+  cardVazioSubtexto: { color: "#C4C4C4", marginTop: 4, fontSize: 13 },
   cardPedido: { backgroundColor: "#FFFFFF", borderRadius: 18, marginBottom: 12 },
+  cardSOS: { borderLeftWidth: 4, borderLeftColor: "#D32F2F" },
   cardHistorico: { backgroundColor: "#FFFFFF", borderRadius: 18, marginBottom: 10 },
   topoPedido: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   codigoBox: { flexDirection: "row", alignItems: "center" },
@@ -291,4 +328,5 @@ const styles = StyleSheet.create({
   chipConcluido: { backgroundColor: "#2E7D32" },
   chipRejeitado: { backgroundColor: "#9E9E9E" },
   chipTexto: { color: "#FFFFFF", fontWeight: "bold", fontSize: 11 },
+  chipSOSTexto: { color: "#FFFFFF", fontWeight: "bold", fontSize: 14 },
 });
