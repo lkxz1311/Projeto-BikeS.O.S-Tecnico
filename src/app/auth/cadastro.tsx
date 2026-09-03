@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { View, StyleSheet, Alert } from "react-native";
+import { View, StyleSheet, Alert, Platform } from "react-native";
 import { Button, Card, Text, TextInput, ActivityIndicator } from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
@@ -68,11 +68,28 @@ export default function Cadastro() {
         return;
       }
 
-      await AsyncStorage.setItem("userId", String(resultado.data?.id));
+      const idCadastrado = String(resultado.data?.id);
 
-      Alert.alert("Sucesso", "Empresa cadastrada com sucesso!", [
-        { text: "OK", onPress: () => router.replace("/main/home") },
-      ]);
+      if (!idCadastrado) {
+        Alert.alert("Erro", "Não foi possível identificar o ID do usuário cadastrado.");
+        return;
+      }
+
+      // Salva as chaves necessárias no AsyncStorage
+      await AsyncStorage.setItem("userId", idCadastrado);
+      await AsyncStorage.setItem("tecnicoId", idCadastrado);
+
+      // Redirecionamento imune a bugs de Alert
+      if (Platform.OS === "web") {
+        alert("Empresa cadastrada com sucesso!");
+        router.replace("/main/home");
+      } else {
+        Alert.alert("Sucesso", "Empresa cadastrada com sucesso!", [
+          { text: "OK", onPress: () => router.replace("/main/home") },
+        ]);
+        // Fallback garantido
+        router.replace("/main/home");
+      }
 
     } catch (error) {
       Alert.alert("Erro", "Não foi possível conectar ao servidor");
