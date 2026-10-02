@@ -1,10 +1,31 @@
+import React, { useCallback, useEffect, useState } from "react";
+import {
+  Alert,
+  Modal,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import {
+  ActivityIndicator,
+  Avatar,
+  Button,
+  Card,
+  Chip,
+  Divider,
+  IconButton,
+  Text,
+} from "react-native-paper";
+import { SafeAreaView } from "react-native-safe-area-context";
+
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Location from "expo-location";
 import { useFocusEffect } from "expo-router";
-import { useCallback, useState } from "react";
-import { Alert, Modal, ScrollView, StyleSheet, TouchableOpacity, View } from "react-native";
-import { ActivityIndicator, Avatar, Button, Card, Chip, Divider, IconButton, Text } from "react-native-paper";
-import { SafeAreaView } from "react-native-safe-area-context";
+
+import Mapa from "./mapa";
 
 type Avaliacao = {
   nota: number;
@@ -18,6 +39,8 @@ type Pedido = {
   problema: string;
   bike: string;
   localizacao: string;
+  latitude?: number;
+  longitude?: number;
   pagamento?: string;
   status: string;
   tecnicoSolicitadoId?: string | null;
@@ -29,16 +52,89 @@ type Pedido = {
   avaliacao?: Avaliacao;
 };
 
-export default function Home() {
+export default function HomeTecnico() {
   const [pedidosDisponiveis, setPedidosDisponiveis] = useState<Pedido[]>([]);
   const [pedidosEmAndamento, setPedidosEmAndamento] = useState<Pedido[]>([]);
   const [historico, setHistorico] = useState<Pedido[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [nomeTecnico, setNomeTecnico] = useState("");
   const [verTodosPedidos, setVerTodosPedidos] = useState(false);
   const [verTodosHistorico, setVerTodosHistorico] = useState(false);
 
   const [pedidoSelecionado, setPedidoSelecionado] = useState<Pedido | null>(null);
+
+  // Estados para rastreamento de rota dinâmica
+  const [tecnicoCoords, setTecnicoCoords] = useState<{ latitude: number; longitude: number } | undefined>(undefined);
+  const [clienteCoords, setClienteCoords] = useState<{ latitude: number; longitude: number } | undefined>(undefined);
+
+  // 1. Inicia monitoramento do GPS do técnico em tempo real
+  useEffect(() => {
+    let inscricaoGps: Location.LocationSubscription | null = null;
+
+    (async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") return;
+
+      // Pega posição inicial rapidamente
+      const inicial = await Location.getCurrentPositionAsync({});
+      setTecnicoCoords({
+        latitude: inicial.coords.latitude,
+        longitude: inicial.coords.longitude,
+      });
+
+      // Atualiza conforme o técnico se movimenta
+      inscricaoGps = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.High,
+          distanceInterval: 10, // Atualiza a cada 10 metros percorridos
+        },
+        (loc) => {
+          setTecnicoCoords({
+            latitude: loc.coords.latitude,
+            longitude: loc.coords.longitude,
+          });
+        }
+      );
+    })();
+
+    return () => {
+      if (inscricaoGps) inscricaoGps.remove();
+    };
+  }, []);
+
+  // 2. Sempre que houver um pedido em andamento, extrai as coordenadas do cliente
+  useEffect(() => {
+    const pedidoAtivo = pedidosEmAndamento[0];
+
+    if (!pedidoAtivo) {
+      setClienteCoords(undefined);
+      return;
+    }
+
+    // Se o pedido já vier com lat/lng numéricos do backend
+    if (pedidoAtivo.latitude && pedidoAtivo.longitude) {
+      setClienteCoords({
+        latitude: Number(pedidoAtivo.latitude),
+        longitude: Number(pedidoAtivo.longitude),
+      });
+      return;
+    }
+
+    // Se o pedido tiver apenas o texto do endereço, faz o Geocoding automático
+    if (pedidoAtivo.localizacao) {
+      Location.geocodeAsync(pedidoAtivo.localizacao)
+        .then((resultados) => {
+          if (resultados && resultados.length > 0) {
+            setClienteCoords({
+              latitude: resultados[0].latitude,
+              longitude: resultados[0].longitude,
+            });
+          }
+        })
+        .catch((err) => console.log("[Geocode Error]:", err));
+    }
+  }, [pedidosEmAndamento]);
 
   useFocusEffect(
     useCallback(() => {
@@ -55,25 +151,36 @@ export default function Home() {
       if (!userId) return;
 
       const resUsuario = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/usuarios/${userId}`);
-      const usuario = await resUsuario.json();
-      setNomeTecnico(usuario.nome || "Técnico");
+      if (resUsuario.ok) {
+        const usuario = await resUsuario.json();
+        setNomeTecnico(usuario.nome || "Técnico");
+      }
 
-      const resDisponiveis = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/pedidos/disponiveis?tecnicoId=${userId}`);
-      const disponiveis = await resDisponiveis.json();
-      setPedidosDisponiveis(Array.isArray(disponiveis) ? disponiveis : []);
+      const resDisponiveis = await fetch(
+        `${process.env.EXPO_PUBLIC_API_URL}/pedidos/disponiveis?tecnicoId=${userId}`
+      );
+      if (resDisponiveis.ok) {
+        const disponiveis = await resDisponiveis.json();
+        setPedidosDisponiveis(Array.isArray(disponiveis) ? disponiveis : []);
+      }
 
-      const resAndamento = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/pedidos/tecnico/${userId}`);
-      const andamento = await resAndamento.json();
-      setPedidosEmAndamento(Array.isArray(andamento) ? andamento : []);
+      const resAndamento = await fetch(
+        `${process.env.EXPO_PUBLIC_API_URL}/pedidos/tecnico/${userId}`
+      );
+      if (resAndamento.ok) {
+        const andamento = await resAndamento.json();
+        setPedidosEmAndamento(Array.isArray(andamento) ? andamento : []);
+      }
 
       const resHistorico = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/pedidos/historico`);
-      const hist: Pedido[] = await resHistorico.json();
-      
-      if (Array.isArray(hist)) {
-        const apenasConcluidos = hist.filter((p) => p.status === "Finalizado");
-        setHistorico(apenasConcluidos);
-      } else {
-        setHistorico([]);
+      if (resHistorico.ok) {
+        const hist: Pedido[] = await resHistorico.json();
+        if (Array.isArray(hist)) {
+          const apenasConcluidos = hist.filter((p) => p.status === "Finalizado");
+          setHistorico(apenasConcluidos);
+        } else {
+          setHistorico([]);
+        }
       }
     } catch (error) {
       console.log("Erro ao carregar dados:", error);
@@ -82,6 +189,12 @@ export default function Home() {
     }
   }
 
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await carregarDados();
+    setRefreshing(false);
+  }, []);
+
   async function aceitarPedido(id: string) {
     try {
       let userId = await AsyncStorage.getItem("userId");
@@ -89,7 +202,10 @@ export default function Home() {
       if (!userId) userId = await AsyncStorage.getItem("id");
 
       if (!userId) {
-        Alert.alert("Erro de Autenticação", "ID do técnico não encontrado no armazenamento local. Faça login novamente.");
+        Alert.alert(
+          "Erro de Autenticação",
+          "ID do técnico não encontrado no armazenamento local."
+        );
         return;
       }
 
@@ -103,16 +219,15 @@ export default function Home() {
       });
 
       if (response.ok) {
-        Alert.alert("Sucesso", "Pedido aceito! Acompanhe em Meus Serviços.");
+        Alert.alert("Serviço Aceito! 🎯", "A rota até o cliente foi gerada no mapa.");
         setPedidoSelecionado(null);
-        carregarDados();
+        await carregarDados();
       } else {
         const errData = await response.json();
-        console.log("Erro da API ao aceitar:", errData);
         Alert.alert("Aviso", errData.mensagem || "Não foi possível aceitar o pedido");
       }
     } catch (error) {
-      console.log("Erro de rede/catch:", error);
+      console.error("Erro ao aceitar pedido:", error);
       Alert.alert("Erro", "Não foi possível conectar ao servidor");
     }
   }
@@ -126,9 +241,9 @@ export default function Home() {
       });
 
       if (response.ok) {
-        Alert.alert("Pedido rejeitado", "O pedido foi recusado.");
+        Alert.alert("Pedido Rejeitado", "O chamado foi recusado.");
         setPedidoSelecionado(null);
-        carregarDados();
+        await carregarDados();
       } else {
         const errData = await response.json();
         Alert.alert("Aviso", errData.mensagem || "Não foi possível rejeitar o pedido");
@@ -147,26 +262,44 @@ export default function Home() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
-      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-
-        {/* HEADER */}
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={["#2E7D32"]}
+            tintColor="#2E7D32"
+          />
+        }
+      >
+        {/* CABEÇALHO */}
         <View style={styles.header}>
           <View style={styles.headerEsquerda}>
-            <Avatar.Icon size={52} icon="store" color="#FFFFFF" style={styles.avatar} />
+            <Avatar.Icon size={48} icon="store" color="#FFFFFF" style={styles.avatar} />
             <View>
               <Text style={styles.titulo}>Painel do Técnico</Text>
-              <Text style={styles.subtitulo}>Olá, {nomeTecnico}!👋</Text>
+              <Text style={styles.subtitulo}>Olá, {nomeTecnico || "Técnico"}! 👋</Text>
             </View>
           </View>
-          <IconButton icon="bell-outline" iconColor="#2E7D32" size={26} />
+          <IconButton icon="bell-outline" iconColor="#2E7D32" size={24} />
         </View>
 
-        {/* RESUMO */}
+        {/* ÁREA DO MAPA - RECEBE ORIGEM E DESTINO AUTOMATICAMENTE */}
+        <View style={styles.secaoHeader}>
+        </View>
+        <View style={styles.mapaContainer}>
+          <Mapa />
+        </View>
+
+        {/* CARDS DE RESUMO */}
         <View style={styles.grid}>
           <Card style={styles.cardResumo}>
             <Card.Content>
               <View style={styles.iconeBoxLaranja}>
-                <MaterialCommunityIcons name="clock-outline" size={26} color="#F59E0B" />
+                <MaterialCommunityIcons name="clock-outline" size={24} color="#F59E0B" />
               </View>
               <Text style={styles.numero}>{pedidosDisponiveis.length}</Text>
               <Text style={styles.label}>Disponíveis</Text>
@@ -176,7 +309,7 @@ export default function Home() {
           <Card style={styles.cardResumo}>
             <Card.Content>
               <View style={styles.iconeBoxVerde}>
-                <MaterialCommunityIcons name="bike-fast" size={26} color="#2E7D32" />
+                <MaterialCommunityIcons name="bike-fast" size={24} color="#2E7D32" />
               </View>
               <Text style={styles.numero}>{pedidosEmAndamento.length}</Text>
               <Text style={styles.label}>Em andamento</Text>
@@ -186,7 +319,7 @@ export default function Home() {
           <Card style={styles.cardResumo}>
             <Card.Content>
               <View style={styles.iconeBoxAzul}>
-                <MaterialCommunityIcons name="check-circle-outline" size={26} color="#1565C0" />
+                <MaterialCommunityIcons name="check-circle-outline" size={24} color="#1565C0" />
               </View>
               <Text style={styles.numero}>{historico.length}</Text>
               <Text style={styles.label}>Concluídos</Text>
@@ -207,30 +340,38 @@ export default function Home() {
         </View>
 
         {loading ? (
-          <ActivityIndicator color="#2E7D32" style={{ marginTop: 20 }} />
+          <ActivityIndicator color="#2E7D32" style={{ marginVertical: 20 }} />
         ) : pedidosDisponiveis.length === 0 ? (
           <Card style={styles.cardVazio}>
             <Card.Content style={styles.cardVazioContent}>
-              <MaterialCommunityIcons name="clipboard-check-outline" size={40} color="#9E9E9E" />
-              <Text style={styles.cardVazioTexto}>Nenhum pedido disponível</Text>
+              <MaterialCommunityIcons name="clipboard-check-outline" size={36} color="#9E9E9E" />
+              <Text style={styles.cardVazioTexto}>Nenhum pedido disponível no momento</Text>
             </Card.Content>
           </Card>
         ) : (
           pedidosVisiveis.map((pedido) => (
-            <TouchableOpacity key={pedido.id} activeOpacity={0.8} onPress={() => setPedidoSelecionado(pedido)}>
+            <TouchableOpacity
+              key={pedido.id}
+              activeOpacity={0.8}
+              onPress={() => setPedidoSelecionado(pedido)}
+            >
               <Card style={styles.cardPedido}>
                 <Card.Content>
                   <View style={styles.topoPedido}>
                     <View style={styles.codigoBox}>
-                      <MaterialCommunityIcons name="clipboard-text-outline" size={20} color="#1565C0" />
+                      <MaterialCommunityIcons
+                        name="clipboard-text-outline"
+                        size={18}
+                        color="#1565C0"
+                      />
                       <Text style={styles.codigo}>#{pedido.codigo}</Text>
                       {pedido.tecnicoSolicitadoId && (
                         <View style={styles.tagDirecionado}>
-                          <Text style={styles.tagDirecionadoTexto}>Direcionado a você</Text>
+                          <Text style={styles.tagDirecionadoTexto}>Direcionado</Text>
                         </View>
                       )}
                     </View>
-                    <Text style={styles.toqueDetalhes}>Toque para responder</Text>
+                    <Text style={styles.toqueDetalhes}>Toque para aceitar</Text>
                   </View>
 
                   <Divider style={styles.divider} />
@@ -264,7 +405,7 @@ export default function Home() {
         {historico.length === 0 ? (
           <Card style={styles.cardVazio}>
             <Card.Content style={styles.cardVazioContent}>
-              <MaterialCommunityIcons name="history" size={40} color="#9E9E9E" />
+              <MaterialCommunityIcons name="history" size={36} color="#9E9E9E" />
               <Text style={styles.cardVazioTexto}>Nenhum serviço concluído ainda</Text>
             </Card.Content>
           </Card>
@@ -274,13 +415,19 @@ export default function Home() {
               <Card.Content>
                 <View style={styles.topoPedido}>
                   <View style={styles.codigoBox}>
-                    <MaterialCommunityIcons name="clipboard-text-outline" size={20} color="#1565C0" />
+                    <MaterialCommunityIcons
+                      name="clipboard-text-outline"
+                      size={18}
+                      color="#1565C0"
+                    />
                     <Text style={styles.codigo}>#{pedido.codigo}</Text>
 
                     {pedido.avaliacao && (
                       <View style={styles.tagAvaliacaoTopo}>
-                        <MaterialCommunityIcons name="star" size={14} color="#D97706" />
-                        <Text style={styles.tagAvaliacaoNota}>{pedido.avaliacao.nota.toFixed(1)}</Text>
+                        <MaterialCommunityIcons name="star" size={12} color="#D97706" />
+                        <Text style={styles.tagAvaliacaoNota}>
+                          {pedido.avaliacao.nota.toFixed(1)}
+                        </Text>
                       </View>
                     )}
                   </View>
@@ -291,7 +438,9 @@ export default function Home() {
                 </View>
 
                 <View style={{ marginTop: 8 }}>
-                  <Text style={styles.infoTexto}><Text style={{ fontWeight: "bold" }}>Problema:</Text> {pedido.problema}</Text>
+                  <Text style={styles.infoTexto}>
+                    <Text style={{ fontWeight: "bold" }}>Problema:</Text> {pedido.problema}
+                  </Text>
                   <Text style={styles.dataTexto}>Data: {formatarData(pedido.createdAt)}</Text>
                 </View>
 
@@ -300,28 +449,26 @@ export default function Home() {
                     <Text style={styles.comentarioTexto}>"{pedido.avaliacao.comentario}"</Text>
                   </View>
                 )}
-
               </Card.Content>
             </Card>
           ))
         )}
-
       </ScrollView>
 
-      {/* MODAL DE DETALHES + ACEITAR/REJEITAR */}
+      {/* MODAL DETALHES DO PEDIDO */}
       <Modal
         visible={!!pedidoSelecionado}
         transparent
-        animationType="slide"
+        animationType="fade"
         onRequestClose={() => setPedidoSelecionado(null)}
       >
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitulo}>Pedido #{pedidoSelecionado?.codigo}</Text>
-            
+
             {pedidoSelecionado?.tecnicoSolicitadoId && (
-              <View style={[styles.tagDirecionado, { alignSelf: "flex-start", marginTop: 4, marginBottom: 8 }]}>
-                <Text style={styles.tagDirecionadoTexto}>Este cliente escolheu você especificamente!</Text>
+              <View style={styles.tagModalDirecionado}>
+                <Text style={styles.tagDirecionadoTexto}>Cliente escolheu você!</Text>
               </View>
             )}
 
@@ -329,23 +476,34 @@ export default function Home() {
 
             <View style={styles.infoLinhaModal}>
               <MaterialCommunityIcons name="account-outline" size={18} color="#2E7D32" />
-              <Text style={styles.infoTextoModal}><Text style={{ fontWeight: "bold" }}>Cliente:</Text> {pedidoSelecionado?.user?.nome}</Text>
+              <Text style={styles.infoTextoModal}>
+                <Text style={{ fontWeight: "bold" }}>Cliente:</Text> {pedidoSelecionado?.user?.nome}
+              </Text>
             </View>
             <View style={styles.infoLinhaModal}>
               <MaterialCommunityIcons name="phone-outline" size={18} color="#2E7D32" />
-              <Text style={styles.infoTextoModal}><Text style={{ fontWeight: "bold" }}>Telefone:</Text> {pedidoSelecionado?.user?.telefone}</Text>
+              <Text style={styles.infoTextoModal}>
+                <Text style={{ fontWeight: "bold" }}>Telefone:</Text>{" "}
+                {pedidoSelecionado?.user?.telefone}
+              </Text>
             </View>
             <View style={styles.infoLinhaModal}>
               <MaterialCommunityIcons name="wrench-outline" size={18} color="#2E7D32" />
-              <Text style={styles.infoTextoModal}><Text style={{ fontWeight: "bold" }}>Problema:</Text> {pedidoSelecionado?.problema}</Text>
+              <Text style={styles.infoTextoModal}>
+                <Text style={{ fontWeight: "bold" }}>Problema:</Text> {pedidoSelecionado?.problema}
+              </Text>
             </View>
             <View style={styles.infoLinhaModal}>
               <MaterialCommunityIcons name="bike" size={18} color="#2E7D32" />
-              <Text style={styles.infoTextoModal}><Text style={{ fontWeight: "bold" }}>Bike:</Text> {pedidoSelecionado?.bike}</Text>
+              <Text style={styles.infoTextoModal}>
+                <Text style={{ fontWeight: "bold" }}>Bike:</Text> {pedidoSelecionado?.bike}
+              </Text>
             </View>
             <View style={styles.infoLinhaModal}>
               <MaterialCommunityIcons name="map-marker-outline" size={18} color="#2E7D32" />
-              <Text style={styles.infoTextoModal}><Text style={{ fontWeight: "bold" }}>Local:</Text> {pedidoSelecionado?.localizacao}</Text>
+              <Text style={styles.infoTextoModal}>
+                <Text style={{ fontWeight: "bold" }}>Local:</Text> {pedidoSelecionado?.localizacao}
+              </Text>
             </View>
 
             <View style={styles.modalAcoes}>
@@ -373,7 +531,6 @@ export default function Home() {
           </View>
         </View>
       </Modal>
-
     </SafeAreaView>
   );
 }
@@ -382,19 +539,62 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: "#F4FBF4" },
   container: { flex: 1, backgroundColor: "#F4FBF4" },
   content: { padding: 16, paddingBottom: 30 },
-  header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 18 },
+
+  header: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 14,
+  },
   headerEsquerda: { flexDirection: "row", alignItems: "center" },
   avatar: { backgroundColor: "#2E7D32", marginRight: 12 },
-  titulo: { fontSize: 22, fontWeight: "bold", color: "#1E2A38" },
-  subtitulo: { color: "#5F6B7A", marginTop: 2 },
+  titulo: { fontSize: 20, fontWeight: "bold", color: "#1E2A38" },
+  subtitulo: { color: "#5F6B7A", fontSize: 13, marginTop: 1 },
+
+  mapaContainer: {
+    height: 220,
+    borderRadius: 18,
+    overflow: "hidden",
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    backgroundColor: "#FFFFFF",
+  },
+
   grid: { flexDirection: "row", gap: 12, marginBottom: 14 },
   cardResumo: { flex: 1, backgroundColor: "#FFFFFF", borderRadius: 18 },
-  iconeBoxLaranja: { width: 46, height: 46, borderRadius: 14, backgroundColor: "#FFF7ED", justifyContent: "center", alignItems: "center" },
-  iconeBoxVerde: { width: 46, height: 46, borderRadius: 14, backgroundColor: "#E8F5E9", justifyContent: "center", alignItems: "center" },
-  iconeBoxAzul: { width: 46, height: 46, borderRadius: 14, backgroundColor: "#E8F0FE", justifyContent: "center", alignItems: "center" },
+  iconeBoxLaranja: {
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: "#FFF7ED",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  iconeBoxVerde: {
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: "#E8F5E9",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  iconeBoxAzul: {
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: "#E8F0FE",
+    justifyContent: "center",
+    alignItems: "center",
+  },
   numero: { fontSize: 28, fontWeight: "bold", color: "#1E2A38", marginTop: 10 },
   label: { color: "#5F6B7A", marginTop: 2, fontSize: 12 },
-  secaoHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 10 },
+  secaoHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 10,
+  },
   secaoTitulo: { fontSize: 18, fontWeight: "bold", color: "#1E2A38" },
   verMais: { color: "#2E7D32", fontWeight: "bold", fontSize: 14 },
   cardVazio: { backgroundColor: "#FFFFFF", borderRadius: 18, marginBottom: 12 },
@@ -402,13 +602,33 @@ const styles = StyleSheet.create({
   cardVazioTexto: { color: "#9E9E9E", marginTop: 8, fontSize: 15 },
   cardPedido: { backgroundColor: "#FFFFFF", borderRadius: 18, marginBottom: 12 },
   toqueDetalhes: { fontSize: 12, color: "#2E7D32", fontWeight: "600" },
-  cardHistorico: { backgroundColor: "#FFFFFF", borderRadius: 18, marginBottom: 10, borderWidth: 1, borderColor: "#E5E7EB" },
+  cardHistorico: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 18,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
   topoPedido: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   codigoBox: { flexDirection: "row", alignItems: "center", gap: 6 },
   codigo: { fontSize: 16, fontWeight: "bold", color: "#1565C0" },
-  tagDirecionado: { backgroundColor: "#E0F2FE", paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
+  tagDirecionado: {
+    backgroundColor: "#E0F2FE",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
   tagDirecionadoTexto: { fontSize: 11, fontWeight: "bold", color: "#0369A1" },
-  tagAvaliacaoTopo: { flexDirection: "row", alignItems: "center", backgroundColor: "#FEF3C7", paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8, gap: 2, marginLeft: 4 },
+  tagAvaliacaoTopo: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FEF3C7",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+    gap: 2,
+    marginLeft: 4,
+  },
   tagAvaliacaoNota: { fontSize: 12, fontWeight: "bold", color: "#D97706" },
   divider: { marginVertical: 10 },
   infoLinha: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 },
@@ -418,13 +638,26 @@ const styles = StyleSheet.create({
   comentarioTexto: { fontStyle: "italic", color: "#4B5563", fontSize: 13 },
   chipFinalizadoFoto: { backgroundColor: "#1E5E20", borderRadius: 10 },
   chipTextoFoto: { color: "#FFFFFF", fontWeight: "bold", fontSize: 13 },
-  
-  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: 20 },
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    padding: 20,
+  },
   modalContent: { backgroundColor: "#FFFFFF", borderRadius: 20, padding: 20 },
-  modalTitulo: { fontSize: 20, fontWeight: "bold", color: "#1E2A38" },
+  modalTitulo: { fontSize: 18, fontWeight: "bold", color: "#1E2A38" },
+  tagModalDirecionado: {
+    alignSelf: "flex-start",
+    backgroundColor: "#E0F2FE",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    marginTop: 6,
+  },
   infoLinhaModal: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 8 },
-  infoTextoModal: { fontSize: 15, color: "#374151" },
-  modalAcoes: { flexDirection: "row", gap: 10, marginTop: 20 },
-  fecharModal: { alignItems: "center", marginTop: 14 },
-  fecharModalTexto: { color: "#6B7280", fontSize: 14, fontWeight: "bold" },
+  infoTextoModal: { fontSize: 14, color: "#374151" },
+  modalAcoes: { flexDirection: "row", gap: 10, marginTop: 16 },
+  fecharModal: { alignItems: "center", marginTop: 12 },
+  fecharModalTexto: { color: "#6B7280", fontSize: 13, fontWeight: "bold" },
 });

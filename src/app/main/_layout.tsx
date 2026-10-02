@@ -1,5 +1,5 @@
-import { Tabs } from "expo-router";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { Tabs } from "expo-router";
 import { Platform, StyleSheet } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -50,6 +50,13 @@ export default function MainLayout() {
           ),
         }}
       />
+
+     <Tabs.Screen
+  name="mapa"
+  options={{
+    href: null,
+  }}
+/>  
     </Tabs>
   );
 }

@@ -1,14 +1,17 @@
 {
   "expo": {
-    "name": "BikeTecnico",
-    "slug": "BikeTecnico",
+    "name": "BikeS.O.S - Técnico",
+    "slug": "BikeSOS",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "biketecnico",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/images/icon.png"
+      "icon": "./assets/images/icon.png",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "O aplicativo precisa da sua localização para mostrar os técnicos e chamados de socorro no mapa."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -18,7 +21,16 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.BikeTecnico"
+      "package": "com.anonymous.BikeTecnico",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyBWCyipGivSN2DlYBeyDxoZDkqFGbzya5g"
+        }
+      },
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ]
     },
     "web": {
       "output": "static",
@@ -29,11 +41,15 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#208AEF",
-          "android": {
-            "image": "./assets/images/splash-icon.png",
-            "imageWidth": 76
-          }
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 76,
+          "resizeMode": "contain"
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "O aplicativo precisa da sua localização para mostrar os técnicos e chamados de socorro no mapa."
         }
       ],
       "expo-image",
@@ -42,6 +58,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "29a725b1-2a6b-4d9a-9430-63ae7247f318"
+      }
     }
   }
 }
