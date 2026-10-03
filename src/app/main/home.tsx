@@ -52,6 +52,16 @@ type Pedido = {
   avaliacao?: Avaliacao;
 };
 
+// Converte "latitude,longitude" (formato salvo pelo backend quando o cliente envia GPS)
+function extrairCoordenadas(texto?: string) {
+  const match = texto?.trim().match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+  if (!match) return undefined;
+  const latitude = Number(match[1]);
+  const longitude = Number(match[2]);
+  if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return undefined;
+  return { latitude, longitude };
+}
+
 export default function HomeTecnico() {
   const [pedidosDisponiveis, setPedidosDisponiveis] = useState<Pedido[]>([]);
   const [pedidosEmAndamento, setPedidosEmAndamento] = useState<Pedido[]>([]);
@@ -63,6 +73,7 @@ export default function HomeTecnico() {
   const [verTodosHistorico, setVerTodosHistorico] = useState(false);
 
   const [pedidoSelecionado, setPedidoSelecionado] = useState<Pedido | null>(null);
+  const [tecnicoId, setTecnicoId] = useState<string | null>(null);
 
   // Estados para rastreamento de rota dinâmica
   const [tecnicoCoords, setTecnicoCoords] = useState<{ latitude: number; longitude: number } | undefined>(undefined);
@@ -103,10 +114,11 @@ export default function HomeTecnico() {
     };
   }, []);
 
+  // Pedido aceito por este técnico que está em andamento (é ele que gera o rastreamento)
+  const pedidoAtivo = pedidosEmAndamento[0];
+
   // 2. Sempre que houver um pedido em andamento, extrai as coordenadas do cliente
   useEffect(() => {
-    const pedidoAtivo = pedidosEmAndamento[0];
-
     if (!pedidoAtivo) {
       setClienteCoords(undefined);
       return;
@@ -118,6 +130,13 @@ export default function HomeTecnico() {
         latitude: Number(pedidoAtivo.latitude),
         longitude: Number(pedidoAtivo.longitude),
       });
+      return;
+    }
+
+    // Se a localização foi salva como "latitude,longitude"
+    const coordsTexto = extrairCoordenadas(pedidoAtivo.localizacao);
+    if (coordsTexto) {
+      setClienteCoords(coordsTexto);
       return;
     }
 
@@ -134,11 +153,16 @@ export default function HomeTecnico() {
         })
         .catch((err) => console.log("[Geocode Error]:", err));
     }
-  }, [pedidosEmAndamento]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pedidoAtivo?.id, pedidoAtivo?.localizacao]);
 
   useFocusEffect(
     useCallback(() => {
       carregarDados();
+
+      // Atualiza periodicamente: novos pedidos e mudanças de status (ex.: cliente finalizou)
+      const intervalo = setInterval(carregarDados, 15000);
+      return () => clearInterval(intervalo);
     }, [])
   );
 
@@ -149,6 +173,7 @@ export default function HomeTecnico() {
       if (!userId) userId = await AsyncStorage.getItem("id");
 
       if (!userId) return;
+      setTecnicoId(userId);
 
       const resUsuario = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/usuarios/${userId}`);
       if (resUsuario.ok) {
@@ -291,7 +316,8 @@ export default function HomeTecnico() {
         <View style={styles.secaoHeader}>
         </View>
         <View style={styles.mapaContainer}>
-          <Mapa />
+          {/* Enquanto houver pedido aceito, o Mapa envia a localização do técnico ao backend */}
+          <Mapa pedidoId={pedidoAtivo?.id ?? null} tecnicoId={tecnicoId} destino={clienteCoords} />
         </View>
 
         {/* CARDS DE RESUMO */}

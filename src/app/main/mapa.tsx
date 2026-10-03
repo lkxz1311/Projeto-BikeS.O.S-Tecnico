@@ -14,7 +14,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import * as Location from "expo-location";
-import MapView, { PROVIDER_GOOGLE } from "react-native-maps";
+import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import { Text } from "react-native-paper";
 
 import {
@@ -42,7 +42,21 @@ const MAP_STYLE_HIDE_STORES = [
   },
 ];
 
-export default function Mapa() {
+type Coordenada = { latitude: number; longitude: number };
+
+type MapaProps = {
+  /** Pedido aceito pelo técnico. Enquanto existir, a localização é enviada ao backend. */
+  pedidoId?: string | null;
+  /** ID do técnico logado (o backend valida se o pedido pertence a ele). */
+  tecnicoId?: string | null;
+  /** Coordenadas do cliente (destino), quando conhecidas. */
+  destino?: Coordenada;
+};
+
+// Intervalo mínimo entre envios de localização para o backend
+const INTERVALO_ENVIO_MS = 4000;
+
+export default function Mapa({ pedidoId = null, tecnicoId = null, destino }: MapaProps = {}) {
   const mapRef = useRef<MapView>(null);
   const modalMapRef = useRef<MapView>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -51,30 +65,9 @@ export default function Mapa() {
   const [permissao, setPermissao] = useState<Location.PermissionResponse | null>(null);
   const [expandido, setExpandido] = useState(false);
 
-  const [pedidoId, setPedidoId] = useState<string | null>(null);
-
-  useEffect(() => {
-    async function carregarPedidoAtivo() {
-      try {
-        const apiUrl = process.env.EXPO_PUBLIC_API_URL;
-        if (!apiUrl) return;
-
-        const res = await fetch(`${apiUrl}/pedidos/em-andamento`);
-        if (res.ok) {
-          const data = await res.json();
-          // Aceita tanto objeto único quanto array
-          const pedido = Array.isArray(data) ? data[0] : data;
-          if (pedido?.id) {
-            setPedidoId(pedido.id);
-          }
-        }
-      } catch (error) {
-        console.error("Erro ao buscar pedido ativo:", error);
-      }
-    }
-
-    carregarPedidoAtivo();
-  }, []);
+  const [posicaoAtual, setPosicaoAtual] = useState<Coordenada | null>(null);
+  const [compartilhando, setCompartilhando] = useState(false);
+  const enquadrouRef = useRef(false);
 
   // Solicita e monitora permissão de localização
   useEffect(() => {
@@ -97,32 +90,80 @@ export default function Mapa() {
     };
   }, []);
 
-  // 3. Monitoramento e envio do GPS em tempo real (SÓ EXECUTA SE TIVER PERMISSÃO E PEDIDO ID)
+  // Monitoramento e envio do GPS em tempo real (SÓ EXECUTA SE TIVER PERMISSÃO E PEDIDO ACEITO)
   useEffect(() => {
-    if (!permissao?.granted || !pedidoId) return;
+    if (!permissao?.granted || !pedidoId) {
+      setCompartilhando(false);
+      return;
+    }
 
+    const idPedido = pedidoId;
+    let cancelado = false;
+    const foiCancelado = () => cancelado;
     let inscricaoGps: Location.LocationSubscription | null = null;
+    let enviando = false;
+    let ultimoEnvio = 0;
+
+    const enviar = async ({ latitude, longitude }: Coordenada, forcar = false) => {
+      const agora = Date.now();
+      if (enviando || (!forcar && agora - ultimoEnvio < INTERVALO_ENVIO_MS)) return;
+
+      enviando = true;
+      ultimoEnvio = agora;
+      try {
+        await enviarLocalizacaoTecnico({
+          pedidoId: idPedido,
+          tecnicoId: tecnicoId ?? undefined,
+          latitude,
+          longitude,
+        });
+        if (!foiCancelado()) setCompartilhando(true);
+      } catch (err) {
+        console.warn("Falha ao sincronizar GPS com o backend:", err);
+        if (!foiCancelado()) setCompartilhando(false);
+      } finally {
+        enviando = false;
+      }
+    };
+
+    const aoMudarPosicao = (posicao: Location.LocationObject, forcar = false) => {
+      if (foiCancelado()) return;
+      const coords = {
+        latitude: posicao.coords.latitude,
+        longitude: posicao.coords.longitude,
+      };
+      setPosicaoAtual(coords);
+      enviar(coords, forcar);
+    };
 
     const iniciarRastreamento = async () => {
+      // Envia a posição atual imediatamente para o cliente já ver o técnico no mapa
       try {
-        inscricaoGps = await Location.watchPositionAsync(
+        const inicial = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.High,
+        });
+        aoMudarPosicao(inicial, true);
+      } catch (error) {
+        console.warn("Não foi possível obter a posição inicial:", error);
+      }
+
+      try {
+        if (foiCancelado()) return;
+        const inscricao = await Location.watchPositionAsync(
           {
             accuracy: Location.Accuracy.High,
-            timeInterval: 5000,   // Envia no máximo a cada 5 segundos
-            distanceInterval: 5,  // Ou a cada 5 metros percorridos
+            timeInterval: INTERVALO_ENVIO_MS, // No máximo a cada ~4 segundos
+            distanceInterval: 5,              // Ou a cada 5 metros percorridos
           },
-          async (posicao) => {
-            const { latitude, longitude } = posicao.coords;
-
-            await enviarLocalizacaoTecnico({
-              pedidoId,
-              latitude,
-              longitude,
-            }).catch((err) => {
-              console.warn("Falha ao sincronizar GPS com a VPS:", err);
-            });
-          }
+          (posicao) => aoMudarPosicao(posicao)
         );
+
+        // Se o efeito foi desmontado enquanto aguardava, encerra a inscrição
+        if (foiCancelado()) {
+          inscricao.remove();
+        } else {
+          inscricaoGps = inscricao;
+        }
       } catch (error) {
         console.error("Erro ao iniciar rastreamento de GPS:", error);
       }
@@ -131,11 +172,25 @@ export default function Mapa() {
     iniciarRastreamento();
 
     return () => {
-      if (inscricaoGps) {
-        inscricaoGps.remove();
-      }
+      cancelado = true;
+      inscricaoGps?.remove();
     };
-  }, [permissao?.granted, pedidoId]);
+  }, [permissao?.granted, pedidoId, tecnicoId]);
+
+  // Enquadra técnico + cliente no mapa uma vez quando ambos estiverem disponíveis
+  useEffect(() => {
+    if (!destino || !posicaoAtual || enquadrouRef.current) return;
+    enquadrouRef.current = true;
+    mapRef.current?.fitToCoordinates([posicaoAtual, destino], {
+      edgePadding: { top: 60, right: 40, bottom: 40, left: 40 },
+      animated: true,
+    });
+  }, [destino, posicaoAtual]);
+
+  // Novo pedido -> permite enquadrar novamente
+  useEffect(() => {
+    enquadrouRef.current = false;
+  }, [pedidoId]);
 
   const temPermissao = !!permissao?.granted;
   const mostrarAvisoLocalizacao = !!permissao && !permissao.granted;
@@ -197,15 +252,29 @@ export default function Mapa() {
           toolbarEnabled={false}
           userInterfaceStyle="light"
           customMapStyle={MAP_STYLE_HIDE_STORES}
-        />
+        >
+          {destino && (
+            <Marker coordinate={destino} title="Cliente" description="Local do atendimento" pinColor="#1565C0" />
+          )}
+        </MapView>
       </MapaErrorBoundary>
 
       {/* SOBREPOSIÇÃO DO TOPO */}
       <View style={styles.topoWrapper} pointerEvents="box-none">
         <View style={styles.topoLinha} pointerEvents="box-none">
           <View style={styles.tituloBox}>
-            <MaterialCommunityIcons name="navigation-variant" size={16} color="#1565C0" />
-            <Text style={styles.tituloTexto}>Clientes</Text>
+            <MaterialCommunityIcons
+              name={pedidoId ? "access-point" : "navigation-variant"}
+              size={16}
+              color={pedidoId && compartilhando ? "#2E7D32" : "#1565C0"}
+            />
+            <Text style={styles.tituloTexto}>
+              {pedidoId
+                ? compartilhando
+                  ? "Compartilhando localização com o cliente"
+                  : "Conectando localização..."
+                : "Clientes"}
+            </Text>
           </View>
 
           <TouchableOpacity
@@ -256,7 +325,11 @@ export default function Mapa() {
               showsPointsOfInterests={false}
               showsBuildings={false}
               customMapStyle={MAP_STYLE_HIDE_STORES}
-            />
+            >
+              {destino && (
+                <Marker coordinate={destino} title="Cliente" description="Local do atendimento" pinColor="#1565C0" />
+              )}
+            </MapView>
           </View>
         </SafeAreaView>
       </Modal>
@@ -410,6 +483,8 @@ const styles = StyleSheet.create({
   tituloBox: {
     flexDirection: "row",
     alignItems: "center",
+    flexShrink: 1,
+    marginRight: 8,
     gap: 6,
     paddingVertical: 6,
     paddingHorizontal: 10,
@@ -421,7 +496,7 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     shadowOffset: { width: 0, height: 2 },
   },
-  tituloTexto: { fontSize: 12, fontWeight: "bold", color: "#1E2A38" },
+  tituloTexto: { fontSize: 12, fontWeight: "bold", color: "#1E2A38", flexShrink: 1 },
 
   botaoExpandir: {
     width: 32,

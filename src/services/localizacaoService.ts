@@ -31,7 +31,10 @@ export async function enviarLocalizacaoTecnico({
     });
 
     if (!response.ok) {
-      throw new Error(`Erro na API (${response.status}): Falha ao atualizar localização.`);
+      const erro = await response.json().catch(() => null);
+      throw new Error(
+        `Erro na API (${response.status}): ${erro?.mensagem ?? "Falha ao atualizar localização."}`
+      );
     }
 
     return await response.json();
