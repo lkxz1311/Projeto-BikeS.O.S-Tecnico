@@ -1,14 +1,31 @@
-import { useState, useEffect } from "react";
-import { Image, StyleSheet, View, Alert } from "react-native";
+import React, { useCallback, useState } from "react";
+import {
+  Alert,
+  Image,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  View,
+} from "react-native";
+import {
+  ActivityIndicator,
+  Avatar,
+  Button,
+  Card,
+  IconButton,
+  Text,
+  TextInput,
+} from "react-native-paper";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Avatar, Button, Card, IconButton, Text, TextInput, ActivityIndicator } from "react-native-paper";
-import { router } from "expo-router";
-import * as ImagePicker from "expo-image-picker";
+
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as ImagePicker from "expo-image-picker";
+import { router, useFocusEffect } from "expo-router";
 
 export default function Perfil() {
   const [editando, setEditando] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [salvando, setSalvando] = useState(false);
 
   const [empresa, setEmpresa] = useState("");
@@ -16,32 +33,51 @@ export default function Perfil() {
   const [telefone, setTelefone] = useState("");
   const [foto, setFoto] = useState<string | null>(null);
 
-  useEffect(() => {
-    carregarPerfil();
-  }, []);
+  // Recarrega os dados ao abrir ou focar na tela
+  useFocusEffect(
+    useCallback(() => {
+      carregarPerfil();
+    }, [])
+  );
 
   async function carregarPerfil() {
     try {
-      const userId = await AsyncStorage.getItem("userId");
+      let userId = await AsyncStorage.getItem("userId");
+      if (!userId) userId = await AsyncStorage.getItem("tecnicoId");
+      if (!userId) userId = await AsyncStorage.getItem("id");
+
       if (!userId) return sair();
 
       const response = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/usuarios/${userId}`);
-      const data = await response.json();
-
-      setEmpresa(data.nome);
-      setEmail(data.email);
-      setTelefone(data.telefone);
+      if (response.ok) {
+        const data = await response.json();
+        setEmpresa(data.nome || "");
+        setEmail(data.email || "");
+        setTelefone(data.telefone || "");
+      } else {
+        Alert.alert("Aviso", "Não foi possível carregar os dados atualizados");
+      }
     } catch (error) {
-      Alert.alert("Erro", "Não foi possível carregar o perfil");
+      Alert.alert("Erro", "Não foi possível conectar ao servidor");
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }
+
+  // Função disparada ao arrastar a tela para baixo
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    carregarPerfil();
+  }, []);
 
   async function salvarEdicao() {
     setSalvando(true);
     try {
-      const userId = await AsyncStorage.getItem("userId");
+      let userId = await AsyncStorage.getItem("userId");
+      if (!userId) userId = await AsyncStorage.getItem("tecnicoId");
+      if (!userId) userId = await AsyncStorage.getItem("id");
+
       const response = await fetch(`${process.env.EXPO_PUBLIC_API_URL}/usuarios/${userId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -51,11 +87,12 @@ export default function Perfil() {
       if (response.ok) {
         setEditando(false);
         Alert.alert("Sucesso", "Perfil atualizado!");
+        carregarPerfil();
       } else {
-        Alert.alert("Erro", "Falha ao salvar");
+        Alert.alert("Erro", "Falha ao salvar as alterações");
       }
     } catch (error) {
-      Alert.alert("Erro", "Não foi possível salvar");
+      Alert.alert("Erro", "Não foi possível conectar ao servidor");
     } finally {
       setSalvando(false);
     }
@@ -63,7 +100,10 @@ export default function Perfil() {
 
   async function escolherFoto() {
     const permissao = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permissao.granted) return;
+    if (!permissao.granted) {
+      Alert.alert("Permissão necessária", "Precisamos de acesso às fotos para alterar sua imagem.");
+      return;
+    }
 
     const resultado = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
@@ -76,15 +116,29 @@ export default function Perfil() {
   }
 
   async function sair() {
-    await AsyncStorage.removeItem("userId");
+    await AsyncStorage.multiRemove(["userId", "tecnicoId", "id", "userToken", "token"]);
     router.replace("/auth/login");
   }
 
-  if (loading) return <ActivityIndicator style={{ flex: 1 }} color="#2E7D32" />;
+  if (loading && !refreshing) {
+    return <ActivityIndicator style={{ flex: 1, backgroundColor: "#F4FBF4" }} color="#2E7D32" />;
+  }
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
-      <View style={styles.container}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={{ paddingBottom: 30 }}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={["#2E7D32"]}
+            tintColor="#2E7D32"
+          />
+        }
+      >
         <View style={styles.header}>
           <View style={styles.fotoArea}>
             {foto ? (
@@ -92,9 +146,16 @@ export default function Perfil() {
             ) : (
               <Avatar.Icon size={92} icon="store" color="#FFFFFF" style={styles.avatar} />
             )}
-            <IconButton icon="camera" size={20} iconColor="#FFFFFF" containerColor="#2E7D32" style={styles.botaoFoto} onPress={escolherFoto} />
+            <IconButton
+              icon="camera"
+              size={20}
+              iconColor="#FFFFFF"
+              containerColor="#2E7D32"
+              style={styles.botaoFoto}
+              onPress={escolherFoto}
+            />
           </View>
-          <Text style={styles.nome}>{empresa}</Text>
+          <Text style={styles.nome}>{empresa || "Técnico"}</Text>
           <Text style={styles.email}>{email}</Text>
         </View>
 
@@ -112,29 +173,59 @@ export default function Perfil() {
           <Card.Content>
             {editando ? (
               <>
-                <TextInput label="Empresa" mode="outlined" value={empresa} onChangeText={setEmpresa} style={styles.input} activeOutlineColor="#2E7D32" />
-                <TextInput label="Telefone" mode="outlined" value={telefone} onChangeText={setTelefone} keyboardType="phone-pad" style={styles.input} activeOutlineColor="#2E7D32" />
-                <Button mode="contained" buttonColor="#2E7D32" style={styles.botaoSalvar} onPress={salvarEdicao} loading={salvando} disabled={salvando}>
+                <TextInput
+                  label="Empresa"
+                  mode="outlined"
+                  value={empresa}
+                  onChangeText={setEmpresa}
+                  style={styles.input}
+                  activeOutlineColor="#2E7D32"
+                />
+                <TextInput
+                  label="Telefone"
+                  mode="outlined"
+                  value={telefone}
+                  onChangeText={setTelefone}
+                  keyboardType="phone-pad"
+                  style={styles.input}
+                  activeOutlineColor="#2E7D32"
+                />
+                <Button
+                  mode="contained"
+                  buttonColor="#2E7D32"
+                  style={styles.botaoSalvar}
+                  onPress={salvarEdicao}
+                  loading={salvando}
+                  disabled={salvando}
+                >
                   Salvar alterações
                 </Button>
               </>
             ) : (
               <>
                 <Text style={styles.label}>Empresa</Text>
-                <Text style={styles.value}>{empresa}</Text>
+                <Text style={styles.value}>{empresa || "Não informado"}</Text>
+
                 <Text style={styles.label}>Email</Text>
-                <Text style={styles.value}>{email}</Text>
+                <Text style={styles.value}>{email || "Não informado"}</Text>
+
                 <Text style={styles.label}>Telefone</Text>
-                <Text style={styles.value}>{telefone}</Text>
+                <Text style={styles.value}>{telefone || "Não informado"}</Text>
               </>
             )}
           </Card.Content>
         </Card>
 
-        <Button mode="outlined" textColor="#2E7D32" style={styles.botaoSair} icon="logout" onPress={sair}>
+        <Button
+          mode="outlined"
+          textColor="#D32F2F"
+          style={styles.botaoSair}
+          icon="logout"
+          onPress={sair}
+        >
           Sair da conta
         </Button>
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -154,5 +245,5 @@ const styles = StyleSheet.create({
   value: { fontSize: 16, color: "#1E2A38", fontWeight: "600", marginTop: 2 },
   input: { marginBottom: 10, backgroundColor: "#FFFFFF" },
   botaoSalvar: { marginTop: 8, borderRadius: 12 },
-  botaoSair: { borderColor: "#2E7D32", borderRadius: 12 },
+  botaoSair: { borderColor: "#D32F2F", borderRadius: 12 },
 });

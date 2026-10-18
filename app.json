@@ -52,6 +52,7 @@
           "locationWhenInUsePermission": "O aplicativo precisa da sua localização para mostrar os técnicos e chamados de socorro no mapa."
         }
       ],
+      "react-native-maps",
       "expo-image",
       "expo-web-browser"
     ],

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   Alert,
+  Linking,
   Modal,
   RefreshControl,
   ScrollView,
@@ -32,6 +33,17 @@ type Avaliacao = {
   comentario?: string;
 };
 
+type EnderecoEstruturado = {
+  rua: string;
+  cidade: string;
+  estado: string;
+};
+
+type CoordenadasGPS = {
+  latitude: number;
+  longitude: number;
+};
+
 type Pedido = {
   id: string;
   codigo: string;
@@ -39,6 +51,8 @@ type Pedido = {
   problema: string;
   bike: string;
   localizacao: string;
+  enderecoCompleto?: EnderecoEstruturado;
+  coordenadas?: CoordenadasGPS | null;
   latitude?: number;
   longitude?: number;
   pagamento?: string;
@@ -52,7 +66,6 @@ type Pedido = {
   avaliacao?: Avaliacao;
 };
 
-// Converte "latitude,longitude" (formato salvo pelo backend quando o cliente envia GPS)
 function extrairCoordenadas(texto?: string) {
   const match = texto?.trim().match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
   if (!match) return undefined;
@@ -60,6 +73,18 @@ function extrairCoordenadas(texto?: string) {
   const longitude = Number(match[2]);
   if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return undefined;
   return { latitude, longitude };
+}
+
+/**
+ * Exibe o endereço de forma limpa no formato: Rua - Cidade/UF
+ */
+function formatarEnderecoLinha(pedido?: Pedido | null): string {
+  if (!pedido) return "Endereço não informado";
+  if (pedido.enderecoCompleto?.rua) {
+    const { rua, cidade, estado } = pedido.enderecoCompleto;
+    return `${rua} - ${cidade}/${estado}`;
+  }
+  return pedido.localizacao || "Endereço não informado";
 }
 
 export default function HomeTecnico() {
@@ -75,11 +100,10 @@ export default function HomeTecnico() {
   const [pedidoSelecionado, setPedidoSelecionado] = useState<Pedido | null>(null);
   const [tecnicoId, setTecnicoId] = useState<string | null>(null);
 
-  // Estados para rastreamento de rota dinâmica
   const [tecnicoCoords, setTecnicoCoords] = useState<{ latitude: number; longitude: number } | undefined>(undefined);
   const [clienteCoords, setClienteCoords] = useState<{ latitude: number; longitude: number } | undefined>(undefined);
+  const [mapaExpandido, setMapaExpandido] = useState(false);
 
-  // 1. Inicia monitoramento do GPS do técnico em tempo real
   useEffect(() => {
     let inscricaoGps: Location.LocationSubscription | null = null;
 
@@ -87,18 +111,16 @@ export default function HomeTecnico() {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") return;
 
-      // Pega posição inicial rapidamente
       const inicial = await Location.getCurrentPositionAsync({});
       setTecnicoCoords({
         latitude: inicial.coords.latitude,
         longitude: inicial.coords.longitude,
       });
 
-      // Atualiza conforme o técnico se movimenta
       inscricaoGps = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.High,
-          distanceInterval: 10, // Atualiza a cada 10 metros percorridos
+          distanceInterval: 10,
         },
         (loc) => {
           setTecnicoCoords({
@@ -114,17 +136,24 @@ export default function HomeTecnico() {
     };
   }, []);
 
-  // Pedido aceito por este técnico que está em andamento (é ele que gera o rastreamento)
-  const pedidoAtivo = pedidosEmAndamento[0];
+  const pedidoAtivo = pedidosEmAndamento.find((p) => p.status !== "Finalizado" && p.status !== "Concluído");
 
-  // 2. Sempre que houver um pedido em andamento, extrai as coordenadas do cliente
   useEffect(() => {
     if (!pedidoAtivo) {
       setClienteCoords(undefined);
       return;
     }
 
-    // Se o pedido já vier com lat/lng numéricos do backend
+    // 1. Prioriza objeto de coordenadas vindo do serviço
+    if (pedidoAtivo.coordenadas?.latitude && pedidoAtivo.coordenadas?.longitude) {
+      setClienteCoords({
+        latitude: Number(pedidoAtivo.coordenadas.latitude),
+        longitude: Number(pedidoAtivo.coordenadas.longitude),
+      });
+      return;
+    }
+
+    // 2. Fallback para propriedades de latitude e longitude diretas
     if (pedidoAtivo.latitude && pedidoAtivo.longitude) {
       setClienteCoords({
         latitude: Number(pedidoAtivo.latitude),
@@ -133,14 +162,13 @@ export default function HomeTecnico() {
       return;
     }
 
-    // Se a localização foi salva como "latitude,longitude"
+    // 3. Fallback de busca em texto
     const coordsTexto = extrairCoordenadas(pedidoAtivo.localizacao);
     if (coordsTexto) {
       setClienteCoords(coordsTexto);
       return;
     }
 
-    // Se o pedido tiver apenas o texto do endereço, faz o Geocoding automático
     if (pedidoAtivo.localizacao) {
       Location.geocodeAsync(pedidoAtivo.localizacao)
         .then((resultados) => {
@@ -153,15 +181,12 @@ export default function HomeTecnico() {
         })
         .catch((err) => console.log("[Geocode Error]:", err));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pedidoAtivo?.id, pedidoAtivo?.localizacao]);
+  }, [pedidoAtivo?.id, pedidoAtivo?.localizacao, pedidoAtivo?.coordenadas]);
 
   useFocusEffect(
     useCallback(() => {
       carregarDados();
-
-      // Atualiza periodicamente: novos pedidos e mudanças de status (ex.: cliente finalizou)
-      const intervalo = setInterval(carregarDados, 15000);
+      const intervalo = setInterval(carregarDados, 10000);
       return () => clearInterval(intervalo);
     }, [])
   );
@@ -227,10 +252,7 @@ export default function HomeTecnico() {
       if (!userId) userId = await AsyncStorage.getItem("id");
 
       if (!userId) {
-        Alert.alert(
-          "Erro de Autenticação",
-          "ID do técnico não encontrado no armazenamento local."
-        );
+        Alert.alert("Erro de Autenticação", "ID do técnico não encontrado.");
         return;
       }
 
@@ -252,7 +274,6 @@ export default function HomeTecnico() {
         Alert.alert("Aviso", errData.mensagem || "Não foi possível aceitar o pedido");
       }
     } catch (error) {
-      console.error("Erro ao aceitar pedido:", error);
       Alert.alert("Erro", "Não foi possível conectar ao servidor");
     }
   }
@@ -275,6 +296,21 @@ export default function HomeTecnico() {
       }
     } catch (error) {
       Alert.alert("Erro", "Não foi possível conectar ao servidor");
+    }
+  }
+
+  function abrirNavegacao() {
+    if (!clienteCoords) {
+      Alert.alert("Aviso", "Coordenadas do cliente não encontradas.");
+      return;
+    }
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${clienteCoords.latitude},${clienteCoords.longitude}`;
+    Linking.openURL(url);
+  }
+
+  function abrirLigarCliente() {
+    if (pedidoAtivo?.user?.telefone) {
+      Linking.openURL(`tel:${pedidoAtivo.user.telefone}`);
     }
   }
 
@@ -312,12 +348,22 @@ export default function HomeTecnico() {
           <IconButton icon="bell-outline" iconColor="#2E7D32" size={24} />
         </View>
 
-        {/* ÁREA DO MAPA - RECEBE ORIGEM E DESTINO AUTOMATICAMENTE */}
-        <View style={styles.secaoHeader}>
-        </View>
+        {/* ÁREA DO MAPA */}
         <View style={styles.mapaContainer}>
-          {/* Enquanto houver pedido aceito, o Mapa envia a localização do técnico ao backend */}
-          <Mapa pedidoId={pedidoAtivo?.id ?? null} tecnicoId={tecnicoId} destino={clienteCoords} />
+          <Mapa
+            pedidoId={pedidoAtivo?.id ?? null}
+            tecnicoId={tecnicoId}
+            destino={clienteCoords}
+            enderecoCliente={pedidoAtivo?.enderecoCompleto || pedidoAtivo?.localizacao}
+          />
+          
+          <TouchableOpacity
+            style={styles.btnExpandirNoMapa}
+            activeOpacity={0.8}
+            onPress={() => setMapaExpandido(true)}
+          >
+            <MaterialCommunityIcons name="fullscreen" size={20} color="#2E7D32" />
+          </TouchableOpacity>
         </View>
 
         {/* CARDS DE RESUMO */}
@@ -410,6 +456,10 @@ export default function HomeTecnico() {
                     <MaterialCommunityIcons name="wrench-outline" size={16} color="#6B7280" />
                     <Text style={styles.infoTexto}>{pedido.problema}</Text>
                   </View>
+                  <View style={styles.infoLinha}>
+                    <MaterialCommunityIcons name="map-marker-outline" size={16} color="#6B7280" />
+                    <Text style={styles.infoTexto}>{formatarEnderecoLinha(pedido)}</Text>
+                  </View>
                 </Card.Content>
               </Card>
             </TouchableOpacity>
@@ -467,6 +517,9 @@ export default function HomeTecnico() {
                   <Text style={styles.infoTexto}>
                     <Text style={{ fontWeight: "bold" }}>Problema:</Text> {pedido.problema}
                   </Text>
+                  <Text style={styles.infoTexto}>
+                    <Text style={{ fontWeight: "bold" }}>Local:</Text> {formatarEnderecoLinha(pedido)}
+                  </Text>
                   <Text style={styles.dataTexto}>Data: {formatarData(pedido.createdAt)}</Text>
                 </View>
 
@@ -480,6 +533,84 @@ export default function HomeTecnico() {
           ))
         )}
       </ScrollView>
+
+      {/* MODAL MAPA EXPANDIDO */}
+      <Modal visible={mapaExpandido} animationType="slide" onRequestClose={() => setMapaExpandido(false)}>
+        <SafeAreaView style={{ flex: 1, backgroundColor: "#FFFFFF" }}>
+          <View style={styles.modalMapaHeader}>
+            <IconButton icon="arrow-left" size={24} onPress={() => setMapaExpandido(false)} />
+            <Text style={styles.modalMapaTitulo}>Mapa em Tempo Real</Text>
+          </View>
+
+          <View style={{ flex: 1 }}>
+            <Mapa
+              pedidoId={pedidoAtivo?.id ?? null}
+              tecnicoId={tecnicoId}
+              destino={clienteCoords}
+              enderecoCliente={pedidoAtivo?.enderecoCompleto || pedidoAtivo?.localizacao}
+            />
+          </View>
+
+          {/* PAINEL INFERIOR COM DADOS DINÂMICOS DO PEDIDO */}
+          {pedidoAtivo ? (
+            <View style={styles.painelInferiorMapa}>
+              <View style={styles.topoPedido}>
+                <Text style={styles.codigo}>Atendimento #{pedidoAtivo.codigo}</Text>
+                <Chip style={{ backgroundColor: "#E8F5E9" }} textStyle={{ color: "#2E7D32", fontSize: 11, fontWeight: "bold" }}>
+                  {pedidoAtivo.status}
+                </Chip>
+              </View>
+
+              <View style={{ marginTop: 10, gap: 4 }}>
+                <View style={styles.infoLinha}>
+                  <MaterialCommunityIcons name="account-outline" size={16} color="#2E7D32" />
+                  <Text style={styles.clienteNome}>{pedidoAtivo.user?.nome}</Text>
+                </View>
+
+                <View style={styles.infoLinha}>
+                  <MaterialCommunityIcons name="map-marker-outline" size={16} color="#2E7D32" />
+                  <Text style={styles.enderecoTexto} numberOfLines={2}>
+                    {formatarEnderecoLinha(pedidoAtivo)}
+                  </Text>
+                </View>
+
+                {pedidoAtivo.user?.telefone && (
+                  <View style={styles.infoLinha}>
+                    <MaterialCommunityIcons name="phone-outline" size={16} color="#2E7D32" />
+                    <Text style={styles.telefoneTexto}>{pedidoAtivo.user.telefone}</Text>
+                  </View>
+                )}
+              </View>
+
+              <View style={styles.acoesMapaModal}>
+                <Button
+                  mode="contained"
+                  buttonColor="#2E7D32"
+                  icon="navigation"
+                  onPress={abrirNavegacao}
+                  style={{ flex: 1, borderRadius: 10 }}
+                >
+                  Como Chegar (Maps)
+                </Button>
+                {pedidoAtivo.user?.telefone && (
+                  <IconButton
+                    icon="phone"
+                    mode="contained"
+                    containerColor="#E0F2FE"
+                    iconColor="#0369A1"
+                    size={24}
+                    onPress={abrirLigarCliente}
+                  />
+                )}
+              </View>
+            </View>
+          ) : (
+            <View style={styles.painelInferiorMapa}>
+              <Text style={styles.infoTexto}>Nenhum atendimento em andamento no momento.</Text>
+            </View>
+          )}
+        </SafeAreaView>
+      </Modal>
 
       {/* MODAL DETALHES DO PEDIDO */}
       <Modal
@@ -528,7 +659,7 @@ export default function HomeTecnico() {
             <View style={styles.infoLinhaModal}>
               <MaterialCommunityIcons name="map-marker-outline" size={18} color="#2E7D32" />
               <Text style={styles.infoTextoModal}>
-                <Text style={{ fontWeight: "bold" }}>Local:</Text> {pedidoSelecionado?.localizacao}
+                <Text style={{ fontWeight: "bold" }}>Local:</Text> {formatarEnderecoLinha(pedidoSelecionado)}
               </Text>
             </View>
 
@@ -581,10 +712,45 @@ const styles = StyleSheet.create({
     height: 220,
     borderRadius: 18,
     overflow: "hidden",
-    marginBottom: 14,
     borderWidth: 1,
     borderColor: "#E5E7EB",
     backgroundColor: "#FFFFFF",
+    marginBottom: 14,
+    position: "relative",
+  },
+  btnExpandirNoMapa: {
+    position: "absolute",
+    top: 10,
+    right: 10,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 20,
+    padding: 6,
+    elevation: 3,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+  },
+
+  clienteNome: { fontSize: 15, fontWeight: "bold", color: "#1E2A38" },
+  enderecoTexto: { fontSize: 13, color: "#4B5563", flex: 1 },
+  telefoneTexto: { fontSize: 13, color: "#4B5563", fontWeight: "600" },
+  acoesMapaModal: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 14 },
+
+  modalMapaHeader: { flexDirection: "row", alignItems: "center", padding: 8, backgroundColor: "#FFFFFF" },
+  modalMapaTitulo: { fontSize: 18, fontWeight: "bold", color: "#1E2A38" },
+  painelInferiorMapa: {
+    padding: 18,
+    backgroundColor: "#FFFFFF",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderTopWidth: 1,
+    borderColor: "#E5E7EB",
+    elevation: 10,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.1,
+    shadowRadius: 5,
   },
 
   grid: { flexDirection: "row", gap: 12, marginBottom: 14 },
@@ -657,7 +823,7 @@ const styles = StyleSheet.create({
   },
   tagAvaliacaoNota: { fontSize: 12, fontWeight: "bold", color: "#D97706" },
   divider: { marginVertical: 10 },
-  infoLinha: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 },
+  infoLinha: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 2 },
   infoTexto: { fontSize: 14, color: "#374151" },
   dataTexto: { fontSize: 13, color: "#6B7280", marginTop: 2 },
   boxComentario: { backgroundColor: "#F9FAFB", borderRadius: 8, padding: 8, marginTop: 8 },

@@ -6,6 +6,17 @@ export type PedidoStatus =
   | "Finalizado"
   | "Rejeitado";
 
+export interface EnderecoEstruturado {
+  rua: string;
+  cidade: string;
+  estado: string;
+}
+
+export interface CoordenadasGPS {
+  latitude: number;
+  longitude: number;
+}
+
 export type Pedido = {
   id: string;
   clienteNome: string;
@@ -13,6 +24,8 @@ export type Pedido = {
   problema: string;
   bike: string;
   localizacao: string;
+  enderecoCompleto?: EnderecoEstruturado;
+  coordenadas?: CoordenadasGPS | null;
   pagamento: string;
   status: PedidoStatus;
   tecnicoNome?: string;
@@ -25,7 +38,16 @@ export const pedidos: Pedido[] = [
     clienteTelefone: "(67) 99999-9999",
     problema: "Pneu furado",
     bike: "Mountain Bike",
-    localizacao: "Centro",
+    localizacao: "Av. Afonso Pena, Campo Grande - MS",
+    enderecoCompleto: {
+      rua: "Av. Afonso Pena",
+      cidade: "Campo Grande",
+      estado: "MS",
+    },
+    coordenadas: {
+      latitude: -20.4697,
+      longitude: -54.6201,
+    },
     pagamento: "Pix",
     status: "Aguardando técnico",
   },
@@ -35,12 +57,33 @@ export const pedidos: Pedido[] = [
     clienteTelefone: "(67) 98888-7777",
     problema: "Freio desregulado",
     bike: "Speed",
-    localizacao: "Jardim América",
+    localizacao: "Rua 14 de Julho, Campo Grande - MS",
+    enderecoCompleto: {
+      rua: "Rua 14 de Julho",
+      cidade: "Campo Grande",
+      estado: "MS",
+    },
+    coordenadas: {
+      latitude: -20.4633,
+      longitude: -54.6144,
+    },
     pagamento: "Dinheiro",
     status: "Finalizado",
     tecnicoNome: "Oficina Verde Bike",
   },
 ];
+
+/**
+ * Função utilitária para exibir o endereço higienizado no app do técnico.
+ * Prioriza a rua estruturada e fallback para a localização formatada.
+ */
+export function formatarEnderecoTecnico(pedido: Pedido): string {
+  if (pedido.enderecoCompleto?.rua) {
+    const { rua, cidade, estado } = pedido.enderecoCompleto;
+    return `${rua} - ${cidade}/${estado}`;
+  }
+  return pedido.localizacao || "Endereço não informado";
+}
 
 export function aceitarPedido(id: string) {
   const pedido = pedidos.find((item) => item.id === id);
