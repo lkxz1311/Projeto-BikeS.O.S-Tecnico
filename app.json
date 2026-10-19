@@ -52,7 +52,13 @@
           "locationWhenInUsePermission": "O aplicativo precisa da sua localização para mostrar os técnicos e chamados de socorro no mapa."
         }
       ],
-      "react-native-maps",
+      [
+        "react-native-maps",
+        {
+          "androidGoogleMapsApiKey": "AIzaSyBWCyipGivSN2DlYBeyDxoZDkqFGbzya5g",
+          "iosGoogleMapsApiKey": "AIzaSyBWCyipGivSN2DlYBeyDxoZDkqFGbzya5g"
+        }
+      ],
       "expo-image",
       "expo-web-browser"
     ],
